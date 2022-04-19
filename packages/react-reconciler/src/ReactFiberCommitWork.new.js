@@ -2209,17 +2209,22 @@ function commitMutationEffectsOnFiber(
       recursivelyTraverseMutationEffects(root, finishedWork, lanes);
       commitReconciliationEffects(finishedWork);
 
-      if (flags & Visibility) {
-        const newState: OffscreenState | null = finishedWork.memoizedState;
+      const offscreenFiber: Fiber = (finishedWork.child: any);
+
+      if (offscreenFiber.flags & Visibility) {
+        const newState: OffscreenState | null = offscreenFiber.memoizedState;
         const isHidden = newState !== null;
         if (isHidden) {
-          const wasHidden = current !== null && current.memoizedState !== null;
+          const wasHidden =
+            offscreenFiber.alternate !== null &&
+            offscreenFiber.alternate.memoizedState !== null;
           if (!wasHidden) {
             // TODO: Move to passive phase
             markCommitTimeOfFallback();
           }
         }
       }
+
       if (flags & Update) {
         try {
           commitSuspenseCallback(finishedWork);
@@ -2725,9 +2730,8 @@ function commitPassiveMountOnFiber(
       }
 
       if (enableTransitionTracing) {
-        const transitions = finishedWork.memoizedState.transitions;
-        if (transitions !== null) {
-          transitions.forEach(transition => {
+        if (committedTransitions !== null) {
+          committedTransitions.forEach(transition => {
             // TODO(luna) Do we want to log TransitionStart in the startTransition callback instead?
             addTransitionStartCallbackToPendingTransition({
               transitionName: transition.name,
@@ -2776,6 +2780,11 @@ function commitPassiveMountOnFiber(
             releaseCache(previousCache);
           }
         }
+      }
+
+      if (enableTransitionTracing) {
+        // TODO: Add code to actually process the update queue
+        finishedWork.updateQueue = null;
       }
       break;
     }

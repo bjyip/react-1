@@ -26,6 +26,7 @@ import type {SuspenseContext} from './ReactFiberSuspenseContext.old';
 import type {
   OffscreenProps,
   OffscreenState,
+  OffscreenQueue,
 } from './ReactFiberOffscreenComponent';
 import type {
   Cache,
@@ -236,7 +237,6 @@ import {
   markSkippedUpdateLanes,
   getWorkInProgressRoot,
   pushRenderLanes,
-  getWorkInProgressTransitions,
 } from './ReactFiberWorkLoop.old';
 import {setWorkInProgressVersion} from './ReactMutableSource.old';
 import {pushCacheProvider, CacheContext} from './ReactFiberCacheComponent.old';
@@ -256,6 +256,7 @@ import {
   getSuspendedCache,
   pushTransition,
   getOffscreenDeferredCache,
+  getSuspendedTransitions,
 } from './ReactFiberTransition.old';
 
 const ReactCurrentOwner = ReactSharedInternals.ReactCurrentOwner;
@@ -652,9 +653,11 @@ function updateOffscreenComponent(
     // Rendering a hidden tree.
     if ((workInProgress.mode & ConcurrentMode) === NoMode) {
       // In legacy sync mode, don't defer the subtree. Render it now.
+      // TODO: Consider how Offscreen should work with transitions in the future
       const nextState: OffscreenState = {
         baseLanes: NoLanes,
         cachePool: null,
+        transitions: null,
       };
       workInProgress.memoizedState = nextState;
       if (enableCache) {
@@ -688,6 +691,7 @@ function updateOffscreenComponent(
       const nextState: OffscreenState = {
         baseLanes: nextBaseLanes,
         cachePool: spawnedCachePool,
+        transitions: null,
       };
       workInProgress.memoizedState = nextState;
       workInProgress.updateQueue = null;
@@ -723,6 +727,7 @@ function updateOffscreenComponent(
       const nextState: OffscreenState = {
         baseLanes: NoLanes,
         cachePool: null,
+        transitions: null,
       };
       workInProgress.memoizedState = nextState;
       // Push the lanes that were skipped when we bailed out.
@@ -748,13 +753,15 @@ function updateOffscreenComponent(
 
       subtreeRenderLanes = mergeLanes(prevState.baseLanes, renderLanes);
 
+      let prevCachePool = null;
       if (enableCache) {
         // If the render that spawned this one accessed the cache pool, resume
         // using the same cache. Unless the parent changed, since that means
         // there was a refresh.
-        const prevCachePool = prevState.cachePool;
-        pushTransition(workInProgress, prevCachePool, null);
+        prevCachePool = prevState.cachePool;
       }
+
+      pushTransition(workInProgress, prevCachePool, null);
 
       // Since we're not hidden anymore, reset the state
       workInProgress.memoizedState = null;
@@ -1343,13 +1350,6 @@ function updateHostRoot(current, workInProgress, renderLanes) {
     }
   }
 
-  if (enableTransitionTracing) {
-    // FIXME: Slipped past code review. This is not a safe mutation:
-    // workInProgress.memoizedState is a shared object. Need to fix before
-    // rolling out the Transition Tracing experiment.
-    workInProgress.memoizedState.transitions = getWorkInProgressTransitions();
-  }
-
   // Caution: React DevTools currently depends on this property
   // being called "element".
   const nextChildren = nextState.element;
@@ -1363,6 +1363,7 @@ function updateHostRoot(current, workInProgress, renderLanes) {
       element: nextChildren,
       isDehydrated: false,
       cache: nextState.cache,
+      pendingSuspenseBoundaries: nextState.pendingSuspenseBoundaries,
       transitions: nextState.transitions,
     };
     const updateQueue: UpdateQueue<RootState> = (workInProgress.updateQueue: any);
@@ -1980,6 +1981,7 @@ function mountSuspenseOffscreenState(renderLanes: Lanes): OffscreenState {
   return {
     baseLanes: renderLanes,
     cachePool: getSuspendedCache(),
+    transitions: null,
   };
 }
 
@@ -2014,6 +2016,7 @@ function updateSuspenseOffscreenState(
   return {
     baseLanes: mergeLanes(prevOffscreenState.baseLanes, renderLanes),
     cachePool,
+    transitions: prevOffscreenState.transitions,
   };
 }
 
@@ -2160,6 +2163,16 @@ function updateSuspenseComponent(current, workInProgress, renderLanes) {
         renderLanes,
       );
       workInProgress.memoizedState = SUSPENDED_MARKER;
+      if (enableTransitionTracing) {
+        const currentTransitions = getSuspendedTransitions();
+        if (currentTransitions !== null) {
+          const primaryChildUpdateQueue: OffscreenQueue = {
+            transitions: currentTransitions,
+          };
+          primaryChildFragment.updateQueue = primaryChildUpdateQueue;
+        }
+      }
+
       return fallbackFragment;
     } else if (
       enableCPUSuspense &&
@@ -2280,6 +2293,15 @@ function updateSuspenseComponent(current, workInProgress, renderLanes) {
           prevOffscreenState === null
             ? mountSuspenseOffscreenState(renderLanes)
             : updateSuspenseOffscreenState(prevOffscreenState, renderLanes);
+        if (enableTransitionTracing) {
+          const currentTransitions = getSuspendedTransitions();
+          if (currentTransitions !== null) {
+            const primaryChildUpdateQueue: OffscreenQueue = {
+              transitions: currentTransitions,
+            };
+            primaryChildFragment.updateQueue = primaryChildUpdateQueue;
+          }
+        }
         primaryChildFragment.childLanes = getRemainingWorkInPrimaryTree(
           current,
           renderLanes,
@@ -2321,6 +2343,17 @@ function updateSuspenseComponent(current, workInProgress, renderLanes) {
           current,
           renderLanes,
         );
+
+        if (enableTransitionTracing) {
+          const currentTransitions = getSuspendedTransitions();
+          if (currentTransitions !== null) {
+            const primaryChildUpdateQueue: OffscreenQueue = {
+              transitions: currentTransitions,
+            };
+            primaryChildFragment.updateQueue = primaryChildUpdateQueue;
+          }
+        }
+
         // Skip the primary children, and continue working on the
         // fallback children.
         workInProgress.memoizedState = SUSPENDED_MARKER;
@@ -3579,9 +3612,6 @@ function attemptEarlyBailoutIfNoScheduledUpdate(
       if (enableCache) {
         const cache: Cache = current.memoizedState.cache;
         pushCacheProvider(workInProgress, cache);
-      }
-      if (enableTransitionTracing) {
-        workInProgress.memoizedState.transitions = getWorkInProgressTransitions();
       }
       resetHydrationState();
       break;
