@@ -669,7 +669,7 @@ function updateWorkInProgressHook(): Hook {
   // 下一个要处理的currentHook
   let nextCurrentHook: null | Hook;
   if (currentHook === null) {
-    // 如果 currentHook = null 证明它是第一个hooks，从current树上取出memoizedState，也就是旧的hooks
+    // 如果 currentHook = null 证明它是第一个hooks，从current fiber树上取出memoizedState，也就是旧的hooks
     const current = currentlyRenderingFiber.alternate; // currentlyRenderingFiber：workInProgress
     if (current !== null) {
       nextCurrentHook = current.memoizedState;
